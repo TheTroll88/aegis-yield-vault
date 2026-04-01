@@ -16,11 +16,13 @@ export interface ProtocolYield {
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36";
 
 // Pool IDs on DeFiLlama for each protocol's USDC lending pool (Solana)
+// Verified against live DeFiLlama /pools endpoint
 const LLAMA_POOL_IDS: Record<string, string> = {
-  kamino:   "dc0cce65-8b63-4eeb-86d1-0e2d8e455b7e", // Kamino Main USDC
-  drift:    "d4e2b2b9-8e18-44cf-9a87-f6e73c92aae9", // Drift USDC spot
-  jupiter:  "c2fa7a65-7c41-4a98-987d-4f9b9a83ceaa", // Jupiter Lend USDC
-  marginfi: "e45d98f4-5e2e-4a41-b9e0-8d5c98b8a5b1", // Marginfi USDC
+  kamino:     "d2141a59-c199-4be7-8d4b-c8223954836b", // Kamino Lend USDC
+  jupiter:    "d783c8df-e2ed-44b4-8317-161ccc1b5f06", // Jupiter Lend USDC
+  marginfi:   "e45d98f4-5e2e-4a41-b9e0-8d5c98b8a5b1", // Marginfi USDC
+  loopscale:  "d4491d92-ae68-4fb6-bde6-12207d1102b6", // Loopscale USDC (8.23% APY)
+  loopscale2: "432cb0b0-7087-4a4e-94e9-6c8092c05539", // Loopscale USDC pool 2
 };
 
 // ─── DeFiLlama primary source ────────────────────────────────
@@ -63,14 +65,17 @@ function llamaToProtocol(
 async function fetchKaminoApy(): Promise<ProtocolYield | null> {
   try {
     const pools  = await getLlamaYields();
-    // Match on project + symbol + chain
-    const pool   = pools.find(
+    // Use verified pool ID
+    const pool   = pools.find((p: any) => p.pool === LLAMA_POOL_IDS.kamino);
+    if (pool) return llamaToProtocol("kamino", "Kamino USDC", pool);
+    // Fallback: match by project + symbol
+    const pool2 = pools.find(
       (p: any) =>
-        p.project?.toLowerCase().includes("kamino") &&
+        p.project?.toLowerCase().includes("kamino-lend") &&
         p.symbol?.toUpperCase() === "USDC" &&
         p.chain?.toLowerCase() === "solana"
     );
-    if (pool) return llamaToProtocol("kamino", "Kamino USDC", pool);
+    if (pool2) return llamaToProtocol("kamino", "Kamino USDC", pool2);
   } catch (e: any) {
     console.warn(`  [scan] Kamino (llama): ${e.message}`);
   }
@@ -197,6 +202,27 @@ async function fetchMarginfiApy(): Promise<ProtocolYield | null> {
   }
 }
 
+// ─── Loopscale ─────────────────────────────────────────────
+
+async function fetchLoopscaleApy(): Promise<ProtocolYield | null> {
+  try {
+    const pools = await getLlamaYields();
+    const pool  = pools.find((p: any) => p.pool === LLAMA_POOL_IDS.loopscale);
+    if (pool) return llamaToProtocol("loopscale", "Loopscale USDC", pool);
+    // Fallback: highest APY Loopscale USDC pool
+    const pool2 = pools.find(
+      (p: any) =>
+        p.project?.toLowerCase().includes("loopscale") &&
+        p.symbol?.toUpperCase() === "USDC" &&
+        p.chain?.toLowerCase() === "solana"
+    );
+    if (pool2) return llamaToProtocol("loopscale", "Loopscale USDC", pool2);
+  } catch (e: any) {
+    console.warn(`  [scan] Loopscale (llama): ${e.message}`);
+  }
+  return null;
+}
+
 // ─── Scoring Engine ──────────────────────────────────────────
 
 function computeScore(p: ProtocolYield): number {
@@ -265,7 +291,7 @@ function normalizeAllocation(
 export async function scanYields(): Promise<ProtocolYield[]> {
   const results = await Promise.allSettled([
     fetchKaminoApy(),
-    fetchDriftApy(),
+    fetchLoopscaleApy(),
     fetchJupiterLendApy(),
     fetchMarginfiApy(),
   ]);

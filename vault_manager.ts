@@ -1,15 +1,28 @@
 /**
  * vault_manager.ts — AI-driven rebalancing bot for Aegis Yield Vault
  *
- * Strategy: Continuous APY-optimized allocation across Kamino, Drift,
- * Jupiter Lend, and Marginfi. Risk-gated, concentration-capped,
- * and Foreman-bridged for on-chain execution.
+ * Strategy: Two-layer yield optimization —
+ *   Layer 1: Lending base (Loopscale, Kamino, Jupiter Lend) — 3-8% APY
+ *   Layer 2: Drift delta-neutral (long SOL spot + short SOL-PERP) — 10-40% APY
  *
+ * When Drift funding rates are positive (bullish regime), Foreman allocates
+ * up to 40% of vault to the delta-neutral leg, capturing funding payments
+ * from longs to shorts. The lending layer fills the remainder of the vault.
+ *
+ * Target APY: 10-25% blended (lending base + delta-neutral overlay)
  * Compatible with Voltr Protocol (VoltrClient / @voltr/vault-sdk).
  */
 
-import { scanYields, computeAllocations, computeDrift, type ProtocolYield } from "./yield_scanner.js";
-import { runHealthChecks, isProtocolBlocked, type ProtocolHealth } from "./risk_monitor.js";
+import { isProtocolBlocked, runHealthChecks, type ProtocolHealth } from "./risk_monitor.js";
+import { computeAllocations, computeDrift, scanYields, type ProtocolYield } from "./yield_scanner.js";
+import {
+  fetchSolPerpFunding,
+  recommendDeltaNeutralAllocation,
+  computeBlendedApy,
+  formatFunding,
+  FUNDING_CONFIG,
+  type FundingSnapshot,
+} from "./drift_funding.js";
 
 // ─── Configuration ────────────────────────────────────────────
 
@@ -29,19 +42,26 @@ const CONFIG = {
 // ─── State ────────────────────────────────────────────────────
 
 interface VaultState {
-  currentAllocations: Map<string, number>;
-  lastRebalanceTs:    number;
-  cycleCount:         number;
-  totalRebalances:    number;
-  startTs:            number;
+  currentAllocations:       Map<string, number>;
+  lastRebalanceTs:          number;
+  cycleCount:               number;
+  totalRebalances:          number;
+  startTs:                  number;
+  // Delta-neutral state
+  deltaNeutralWeight:       number;   // 0-0.40 → % of vault in delta-neutral leg
+  lastFunding:              FundingSnapshot | null;
+  deltaNeutralEntryCount:   number;
 }
 
 const state: VaultState = {
-  currentAllocations: new Map(), // starts empty → forces first rebalance
-  lastRebalanceTs:    0,
-  cycleCount:         0,
-  totalRebalances:    0,
-  startTs:            Date.now(),
+  currentAllocations:     new Map(), // starts empty → forces first rebalance
+  lastRebalanceTs:        0,
+  cycleCount:             0,
+  totalRebalances:        0,
+  startTs:                Date.now(),
+  deltaNeutralWeight:     0,
+  lastFunding:            null,
+  deltaNeutralEntryCount: 0,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -129,11 +149,39 @@ async function runDecisionCycle(): Promise<void> {
   // 5. Print current market view
   printTable(protocols, targetAlloc, health);
 
-  // 6. Compute portfolio drift
+  // 6. Compute portfolio drift (lending layer only)
   const drift = computeDrift(state.currentAllocations, targetAlloc);
   const currentApy = weightedApy(state.currentAllocations, protocols);
   const targetApy  = weightedApy(targetAlloc, protocols);
   const apyGain    = targetApy - currentApy;
+
+  // 6b. Fetch Drift delta-neutral opportunity
+  const funding = await fetchSolPerpFunding();
+  state.lastFunding = funding;
+  const recommendedDnWeight = recommendDeltaNeutralAllocation(funding);
+
+  if (funding) {
+    log(formatFunding(funding));
+    if (recommendedDnWeight > 0) {
+      const blended = computeBlendedApy(targetApy, funding.annualizedApyPct, recommendedDnWeight);
+      log(`Delta-neutral opportunity: ${(recommendedDnWeight*100).toFixed(0)}% allocation → blended APY ~${blended.toFixed(1)}%`);
+    } else {
+      log(`Funding below entry threshold (${FUNDING_CONFIG.MIN_ENTRY_APY_PCT}%) — lending-only mode`);
+    }
+  } else {
+    log("Drift funding rate: unavailable — lending-only mode");
+  }
+
+  // Update delta-neutral weight if changed significantly
+  if (Math.abs(recommendedDnWeight - state.deltaNeutralWeight) > 0.05) {
+    if (recommendedDnWeight > state.deltaNeutralWeight) {
+      log(`ENTERING delta-neutral leg: ${(recommendedDnWeight*100).toFixed(0)}% of vault`);
+      state.deltaNeutralEntryCount++;
+    } else {
+      log(`EXITING delta-neutral leg (funding rate too low)`);
+    }
+    state.deltaNeutralWeight = recommendedDnWeight;
+  }
 
   log(`Drift: ${(drift * 100).toFixed(2)}%  APY gain: ${apyGain >= 0 ? "+" : ""}${apyGain.toFixed(3)}%`);
   log(`Current portfolio APY: ${currentApy.toFixed(3)}%  →  Target: ${targetApy.toFixed(3)}%`);
@@ -186,10 +234,12 @@ async function runDecisionCycle(): Promise<void> {
 async function main() {
   console.log("╔══════════════════════════════════════════════════════════╗");
   console.log("║          AEGIS AI YIELD VAULT — REBALANCER               ║");
-  console.log("║   Strategies: Kamino | Drift | Jupiter Lend | Marginfi   ║");
+  console.log("║  Layer 1: Loopscale | Kamino | Jupiter Lend | Marginfi   ║");
+  console.log("║  Layer 2: Drift Delta-Neutral (funding rate capture)     ║");
   console.log("╚══════════════════════════════════════════════════════════╝");
   console.log(`Check interval: ${CONFIG.CHECK_INTERVAL_SEC}s | Rebalance threshold: ${CONFIG.REBALANCE_THRESHOLD * 100}%`);
-  console.log(`Max concentration: ${CONFIG.MAX_CONCENTRATION * 100}% | Min APY gain: +${CONFIG.MIN_APY_GAIN_PCT}%\n`);
+  console.log(`Max concentration: ${CONFIG.MAX_CONCENTRATION * 100}% | Min APY gain: +${CONFIG.MIN_APY_GAIN_PCT}%`);
+  console.log(`Delta-neutral max weight: ${FUNDING_CONFIG.MAX_ALLOCATION_PCT * 100}% | Entry threshold: ${FUNDING_CONFIG.MIN_ENTRY_APY_PCT}% APY\n`);
 
   // Run immediately on start
   await runDecisionCycle();
