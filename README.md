@@ -99,6 +99,43 @@ This prevents over-trading on noise while capturing meaningful yield improvement
 
 ---
 
+## Live Demo Output
+
+```
+╔══════════════════════════════════════════════════════════╗
+║          AEGIS AI YIELD VAULT — REBALANCER               ║
+║   Strategies: Kamino | Drift | Jupiter Lend | Marginfi   ║
+╚══════════════════════════════════════════════════════════╝
+Check interval: 300s | Rebalance threshold: 4%
+Max concentration: 70% | Min APY gain: +0.25%
+
+[vault][0s] --- Cycle #1 ---
+[vault][0s] Scanning protocol yields...
+[vault][2s] Running health checks...
+
+┌─────────────────────────────────────────────────────────┐
+│       AEGIS YIELD VAULT — ALLOCATION REPORT             │
+├──────────────────┬──────────┬─────────────┬─────────────┤
+│ Protocol         │  APY %   │  Util %     │  Target %   │
+├──────────────────┼──────────┼─────────────┼─────────────┤
+│ Kamino USDC      │    2.54 % │     0.0 %   │     41.9 %   │
+│ Jupiter Lend USDC │    3.53 % │     0.0 %   │     58.1 %   │
+└──────────────────┴──────────┴─────────────┴─────────────┘
+
+[vault][2s] REBALANCE TRIGGERED — drift=50.00% gain=+3.120%
+[vault][2s]   kamino     0.0% → 41.9%  (+41.9%)
+[vault][2s]   jupiter    0.0% → 58.1%  (+58.1%)
+[vault][2s] Rebalance #1 complete ✓
+
+[vault][302s] --- Cycle #2 ---
+[vault][305s] Current portfolio APY: 3.120% → Target: 3.120%
+[vault][305s] No rebalance needed (drift 0.00% < 4% threshold)
+```
+
+Data sourced live from DeFiLlama. Allocation updated every 5 minutes. Second cycle correctly holds position — no unnecessary rebalancing.
+
+---
+
 ## License
 
 MIT
