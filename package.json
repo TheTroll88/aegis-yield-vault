@@ -1,0 +1,22 @@
+{
+  "name": "aegis-yield-vault",
+  "version": "1.0.0",
+  "description": "AI-driven yield vault strategy for Ranger Build-A-Bear Hackathon. Dynamically allocates USDC across Kamino, Drift, Jupiter Lend, and Marginfi using real-time APY signals and risk gating.",
+  "main": "vault_manager.ts",
+  "scripts": {
+    "start": "node node_modules/tsx/dist/cli.mjs vault_manager.ts",
+    "scan": "node node_modules/tsx/dist/cli.mjs -e \"import { scanYields } from './yield_scanner.ts'; scanYields().then(p => p.forEach(x => console.log(x.name, x.apy.toFixed(2) + '%')))\"",
+    "health": "node node_modules/tsx/dist/cli.mjs -e \"import { runHealthChecks } from './risk_monitor.ts'; runHealthChecks().then(m => [...m.values()].forEach(h => console.log(h.name, 'risk:', h.riskScore.toFixed(2))))\""
+  },
+  "keywords": ["solana", "defi", "yield", "voltr", "ranger", "kamino", "drift"],
+  "author": "Nathaniel Crigger",
+  "license": "MIT",
+  "dependencies": {
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "@voltr/vault-sdk": "^1.0.21",
+    "bs58": "^6.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}
