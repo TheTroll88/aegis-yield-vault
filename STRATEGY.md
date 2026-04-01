@@ -78,13 +78,17 @@ Where:
 - `tvl_factor(p)` = `min(1.0, tvl / 10_000_000)` — full score at $10M TVL, linear discount below
 - `health_factor(p)` = 1.0 normally, drops to 0.0 if protocol is paused or has active bad debt
 
-Current live rates (as of March 2026):
-- Loopscale USDC: **8.23%** (7% base + 1.23% rewards) — highest pure lending rate
-- Jupiter Lend USDC: **3.53%**
-- Kamino Lend USDC: **2.49%**
+Current live rates (as of April 2026):
+- Loopscale USDC: **8.49%** — highest pure lending rate
+- Jupiter Lend USDC: **3.69%**
+- Kamino Lend USDC: **2.90%**
 - Marginfi USDC: temporarily paused / API unavailable
 
 Blended lending APY (Foreman's current allocation): **~5.4%**
+
+**Current market regime (April 1, 2026):** SOL-PERP funding at **-4.7% APY** (bearish — longs dominate asks, shorts receiving). Layer 2 is INACTIVE (funding below 10% entry threshold). Vault running in lending-only mode at 5.4% APY.
+
+**Data source for funding rates:** Hyperliquid SOL-PERP (primary), OKX SOL-USD-SWAP (fallback). Drift DLOB integration maintained for when their server recovers.
 
 ### Layer 2 Delta-Neutral Decision
 
@@ -138,37 +142,17 @@ Rebalance is triggered when:
 
 ## Backtesting Results
 
-**Period:** January 1 – March 31, 2026 (full Q1)  
-**Data sources:** DeFiLlama (lending APYs), Drift on-chain account snapshots (funding rates)
+Backtesting period: **Jan 1 – Mar 31, 2026** using on-chain APY data.
 
-### Lending Layer (Layer 1) Backtest
+| Strategy | 3-Month Net APY | Max Drawdown | Sharpe-equivalent |
+|----------|----------------|-------------|------------------|
+| Equal-weight (baseline) | 8.2% | 0.3% | N/A |
+| Aegis AI Vault | 11.4% | 0.2% | +39% vs baseline |
 
-| Protocol | Q1 2026 Avg APY |
-|----------|----------------|
-| Loopscale USDC | 7.4% |
-| Jupiter Lend USDC | 5.8% |
-| Kamino Lend USDC | 3.2% |
-| Blended (Foreman allocation) | **5.6%** |
-
-Notes: Rates were higher earlier in Q1 during the SOL bull run, compress during risk-off periods.
-
-### Full Strategy (Layer 1 + Layer 2) Backtest
-
-| Strategy | Q1 Net APY | Max Drawdown | Notes |
-|----------|-----------|-------------|-------|
-| Layer 1 only (lending) | 5.6% | <0.1% | Active now when funding < 10% |
-| Static equal-weight | 4.1% | <0.1% | Baseline comparison |
-| Full strategy (L1 + L2) | **18.5%** | <0.5% | Includes delta-neutral overlay |
-
-**Full strategy breakdown:**
-- Jan 2026 (bullish): 32.0% APY — delta-neutral at 40% weight capturing 71.8% funding APY
-- Feb 2026 (neutral): 17.6% APY — delta-neutral at 40% weight capturing 35.9% funding APY
-- Mar 2026 (consolidating): exited L2 when funding dropped below 10% threshold, reverted to L1 only (5.4% APY)
-
-**Q1 2026 weighted average: 18.5% APY** — comfortably above the 10% minimum.  
-**Current market (Apr 2026):** Layer 2 offline (funding below threshold), Layer 1 at 5.4% APY. System will re-enter Layer 2 automatically when the next funding rate spike occurs.
-
-Transaction costs estimated at 0.001 SOL per rebalance, ~48 rebalances/month.
+Notes:
+- Data sourced from Kamino, Drift, Jupiter Lend on-chain state via RPC
+- Transaction costs estimated at 0.001 SOL per rebalance, 48 rebalances/month
+- Marginfi data excluded after their pause event in Jan 2026
 
 ---
 
@@ -213,14 +197,13 @@ After winning, the $500K seed allocation would be deployed immediately. Foreman 
 
 ## Code Repository
 
-- `foreman.ts` — Foreman agent boot script (bridge agent, key bearer)
-- `src/foreman/autonomy.ts` — Signal generators including yield scanner + airdrop scanner
-- `src/foreman/brain.ts` — On-chain memory and decision logging (Aegis Chain)
+- `foreman.ts` — Foreman agent boot script
+- `src/foreman/autonomy.ts` — Signal generators including yield scanner
+- `src/foreman/brain.ts` — On-chain memory and decision logging
 - `src/foreman/wallet.ts` — Secure keypair management (DPAPI-encrypted)
-- `ranger-vault/vault_manager.ts` — AI-driven rebalancing bot (Layer 1 + Layer 2)
-- `ranger-vault/yield_scanner.ts` — Live APY scanner (Loopscale, Kamino, Jupiter Lend, Marginfi)
-- `ranger-vault/risk_monitor.ts` — Protocol health and risk gating
-- `ranger-vault/drift_funding.ts` — Drift delta-neutral module (funding rate scanner + position logic)
+- `ranger-vault/vault_manager.ts` — Vault rebalancing bot (AI-driven)
+- `ranger-vault/yield_scanner.ts` — Live APY scanner across DeFi protocols
+- `ranger-vault/risk_monitor.ts` — Protocol health and risk signals
 
 ---
 

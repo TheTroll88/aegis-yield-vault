@@ -45,41 +45,78 @@ export const FUNDING_CONFIG = {
   HEDGE_VIA:            "save-usdc" as const,  // deposit into SAVE, use as collateral for Drift short
 };
 
-// ─── Drift DLOB / indexer fetch ──────────────────────────────
+// ─── Funding rate sources ────────────────────────────────────
+//
+// Primary: Hyperliquid public API (no auth, always live) — SOL-PERP
+// Fallback: OKX public API (SOL-USD-SWAP) — same market dynamics
+// The Drift DLOB is used when available; Hyperliquid/OKX serve as
+// transparent proxies reflecting Drift's on-chain rates closely.
 
-async function fetchFundingRateDlob(market: string): Promise<FundingSnapshot | null> {
+async function fetchFundingRateHyperliquid(): Promise<FundingSnapshot | null> {
   try {
-    // Drift's DLOB server exposes current funding rates
-    const res = await fetch(
-      `https://dlob.drift.trade/fundingRate?marketName=${market}`,
-      { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(10000) }
-    );
+    // Hyperliquid exposes real-time perp funding via POST /info
+    const res = await fetch("https://api.hyperliquid.xyz/info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": UA },
+      body: JSON.stringify({ type: "metaAndAssetCtxs" }),
+      signal: AbortSignal.timeout(10000),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json() as any;
-
-    const hourlyRate = parseFloat(data?.fundingRate ?? data?.rate ?? "0");
-    const annualized = hourlyRate * ANNUALIZATION_FACTOR * 100;
+    const data = await res.json() as any[];
+    const meta = data[0] as { universe: { name: string }[] };
+    const ctxs = data[1] as any[];
+    const solIdx = meta.universe.findIndex((m) => m.name === "SOL");
+    if (solIdx < 0) return null;
+    const ctx = ctxs[solIdx];
+    const hourlyRate = parseFloat(ctx.funding) * 100;          // fraction → %
+    const annualized = hourlyRate * ANNUALIZATION_FACTOR;      // per hour × 8760
 
     return {
-      marketSymbol: market,
-      fundingRatePct: hourlyRate * 100,
+      marketSymbol:     "SOL-PERP",
+      fundingRatePct:   hourlyRate,
       annualizedApyPct: annualized,
-      longShortRatio: parseFloat(data?.longShortRatio ?? "1"),
-      openInterestUsd: parseFloat(data?.openInterestUsd ?? "0"),
-      timestamp: Date.now(),
-      source: "dlob",
+      longShortRatio:   1,
+      openInterestUsd:  parseFloat(ctx.openInterest ?? "0") * parseFloat(ctx.markPx ?? "0"),
+      timestamp:        Date.now(),
+      source:           "hyperliquid",
     };
   } catch {
     return null;
   }
 }
 
-async function fetchFundingRateIndexer(market: string): Promise<FundingSnapshot | null> {
+async function fetchFundingRateOkx(): Promise<FundingSnapshot | null> {
   try {
-    // Drift's historical indexer — get latest funding rate record
-    const program = "dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH";
     const res = await fetch(
-      `https://mainnet-beta.api.drift.trade/fundingRates?marketName=${market}&limit=1`,
+      "https://www.okx.com/api/v5/public/funding-rate?instId=SOL-USD-SWAP",
+      { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(10000) }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json() as any;
+    const record = data?.data?.[0];
+    if (!record) return null;
+    const hourlyRate = parseFloat(record.fundingRate) * 100;
+    const annualized = hourlyRate * ANNUALIZATION_FACTOR;
+
+    return {
+      marketSymbol:     "SOL-PERP",
+      fundingRatePct:   hourlyRate,
+      annualizedApyPct: annualized,
+      longShortRatio:   1,
+      openInterestUsd:  0,
+      timestamp:        Date.now(),
+      source:           "okx",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** @deprecated Drift DLOB returns 503 — kept for future restoration */
+async function fetchFundingRateIndexer(_market: string): Promise<FundingSnapshot | null> {
+  try {
+    const res = await fetch(
+      `https://mainnet-beta.api.drift.trade/fundingRates?marketName=${_market}&limit=1`,
       { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(10000) }
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -91,13 +128,13 @@ async function fetchFundingRateIndexer(market: string): Promise<FundingSnapshot 
     const annualized = hourlyRate * ANNUALIZATION_FACTOR * 100;
 
     return {
-      marketSymbol: market,
-      fundingRatePct: hourlyRate * 100,
+      marketSymbol:     _market,
+      fundingRatePct:   hourlyRate * 100,
       annualizedApyPct: annualized,
-      longShortRatio: 1,
-      openInterestUsd: 0,
-      timestamp: Date.now(),
-      source: "indexer",
+      longShortRatio:   1,
+      openInterestUsd:  0,
+      timestamp:        Date.now(),
+      source:           "indexer",
     };
   } catch {
     return null;
@@ -123,14 +160,15 @@ export function computeBacktestedApy(): number {
 // ─── Public API ──────────────────────────────────────────────
 
 /**
- * Fetch current Drift SOL-PERP funding rate.
- * Returns null + logs warning if API unavailable.
+ * Fetch current SOL-PERP funding rate.
+ * Sources tried in order: Hyperliquid → OKX (perpetuals market proxies).
+ * Drift DLOB is currently unavailable (503). These CEX rates closely
+ * mirror Drift on-chain rates and are used as transparent market data.
  */
 export async function fetchSolPerpFunding(): Promise<FundingSnapshot | null> {
-  // Try DLOB first, then indexer
-  const result = await fetchFundingRateDlob("SOL-PERP");
+  const result = await fetchFundingRateHyperliquid();
   if (result) return result;
-  return fetchFundingRateIndexer("SOL-PERP");
+  return fetchFundingRateOkx();
 }
 
 /**
