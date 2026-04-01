@@ -1,141 +1,99 @@
 # Aegis AI Yield Vault — Ranger Build-A-Bear Hackathon
 
-An AI-driven USDC yield vault strategy built on [Voltr Protocol](https://voltr.xyz).
-Dynamically allocates across Kamino, Drift, and Jupiter Lend using real-time APY signals and protocol health gating.
+An AI-driven USDC yield vault built on [Voltr Protocol](https://voltr.xyz) with a two-layer strategy: dynamic lending allocation (Layer 1) + Drift delta-neutral funding rate capture (Layer 2). Managed autonomously by Foreman — a persistent AI agent with browser automation and on-chain execution.
 
 ---
 
 ## Strategy Overview
 
-Instead of equal-weight allocation, this strategy continuously scores each protocol using:
+### Layer 1 — Lending Base (always active)
+Foreman continuously scans Loopscale, Kamino, Jupiter Lend, and Marginfi for the best risk-adjusted USDC yield. Allocation uses a composite score:
 
 ```
-score = APY × utilization_factor × tvl_factor
+score = APY x utilization_factor x tvl_factor x health_factor
 ```
 
-- **Utilization factor**: smooth 1.0 at <80%, ramps to 0 at >95% (liquidity crunch protection)
+- **Utilization factor**: 1.0 at <80% utilization, ramps to 0 at >95%
 - **TVL factor**: full weight above $10M TVL, discounts thin markets
-- **Max concentration cap**: 70% per protocol (prevents over-reliance)
-- **Health gating**: protocols with risk score ≥ 0.60 are excluded regardless of APY
+- **Max concentration cap**: 70% per protocol
+- **Health gating**: protocols with risk score >= 0.60 are excluded
 
-### Live Example (at time of build)
-| Protocol | APY | Utilization | Allocation |
-|---|---|---|---|
-| Jupiter Lend USDC | 3.53% | — | **58.1%** |
-| Kamino USDC | 2.54% | — | **41.9%** |
+### Layer 2 — Drift Delta-Neutral Overlay (regime-activated)
+When SOL-PERP funding rates exceed **10% APY annualized**, Foreman allocates up to **40% of the vault** to a delta-neutral position (long SOL spot + short SOL-PERP on Drift). Net directional exposure: ~zero.
 
-**Weighted portfolio APY: 3.12%** (vs ~3.0% equal-weight)
+Combined target: **10-25% APY** in neutral/bullish regimes.
+
+### Live Output (April 1, 2026)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│       AEGIS YIELD VAULT — ALLOCATION REPORT             │
+├──────────────────┬──────────┬─────────────┬─────────────┤
+│ Protocol         │  APY %   │  Util %     │  Target %   │
+├──────────────────┼──────────┼─────────────┼─────────────┤
+│ Kamino USDC      │   2.90 % │     0.0 %   │    26.6 %   │
+│ Loopscale USDC   │   8.49 % │     0.0 %   │    39.7 %   │
+│ Jupiter Lend USDC│   3.69 % │     0.0 %   │    33.7 %   │
+└──────────────────┴──────────┴─────────────┴─────────────┘
+[vault][4s] SOL-PERP funding: -0.0005%/hr (-4.7% APY) via hyperliquid
+[vault][4s] Funding below entry threshold (10%) — lending-only mode
+[vault][4s] Portfolio APY: 5.39% (bearish regime, Layer 2 inactive)
+```
+
+Current bearish regime: funding is negative -> Layer 2 inactive -> **5.4% lending APY**
+Bull/neutral regime (Q1 2026 backtest): Layer 2 active -> **17-32% blended APY**
+
+---
+
+## Backtest Performance (Q1 2026)
+
+| Period | Funding APY | Blended APY | Regime |
+|--------|------------|-------------|--------|
+| Jan 2026 | +71.8% | **32.0%** | Bullish (SOL $180->$230) |
+| Feb 2026 | +35.9% | **17.6%** | Neutral |
+| Mar 2026 | +16.6% | **9.9%** (Layer 2 exits) | Consolidating |
+| **Q1 Average** | | **~18.5%** | |
+
+Full backtest: [STRATEGY.md](./STRATEGY.md)
 
 ---
 
 ## Architecture
 
 ```
-DeFiLlama Yield API ─────┐
-Kamino API (fallback) ──→ yield_scanner.ts ─→ computeAllocations()
-Drift API (fallback) ────┘                          │
-                                                    ▼
-Marginfi API ───────────→ risk_monitor.ts → isProtocolBlocked()
-                                                    │
-                                                    ▼
-                                           vault_manager.ts
-                                          (decision loop, 5 min)
-                                                    │
-                                                    ▼
-                                          Voltr VoltrClient.rebalance()
-                                          [on-chain execution]
+DeFiLlama Yield API ─────> yield_scanner.ts ─> computeAllocations()
+Hyperliquid/OKX API ────-> drift_funding.ts -> recommendDeltaNeutralAllocation()
+Marginfi API ──────────-> risk_monitor.ts  -> isProtocolBlocked()
+                                   v
+                          vault_manager.ts (5 min loop)
+                                   v
+                   Layer 1 Rebalance + Layer 2 Delta-Neutral
 ```
-
-### Files
 
 | File | Purpose |
 |---|---|
-| `vault_manager.ts` | Main decision loop — scans, scores, rebalances |
+| `vault_manager.ts` | Main decision loop |
 | `yield_scanner.ts` | Multi-source APY scanner (DeFiLlama primary) |
-| `risk_monitor.ts` | Protocol health checks — blocks impaired protocols |
-| `STRATEGY.md` | Full strategy documentation + backtest results |
+| `drift_funding.ts` | Delta-neutral module (funding rate fetch + allocation) |
+| `risk_monitor.ts` | Protocol health gates |
+| `STRATEGY.md` | Full docs + backtest results |
 
 ---
 
 ## Running
 
 ```bash
-# Install
 npm install
-
-# Run the AI rebalancer (prints allocation table every 5 min)
-npm start
+node node_modules/tsx/dist/cli.mjs vault_manager.ts
 ```
 
-Requires Node.js 18+. No RPC key needed for APY scanning — data comes from DeFiLlama.
-
-For on-chain execution (vault initialization + rebalance transactions), set:
-```env
-HELIUS_RPC_URL=<your-helius-rpc>
-ADMIN_FILE_PATH=keys/admin.json
-MANAGER_FILE_PATH=keys/manager.json
-```
-
-Then follow the [Voltr Workshop 1 sequence](https://github.com/voltr-finance/base-scripts).
+Requires Node.js 18+. No API keys needed — DeFiLlama and Hyperliquid are free public APIs.
 
 ---
 
-## Rebalance Logic
+## Hackathon Info
 
-A rebalance triggers when **both** conditions are met:
-1. Portfolio drift ≥ 4% (allocation shifted from target)
-2. Expected APY gain ≥ 0.25% annualized
-
-This prevents over-trading on noise while capturing meaningful yield improvements.
-
----
-
-## Hackathon: Ranger Build-A-Bear
-
-- Submission deadline: **April 6, 2026**
-- Prize: Vault seed funding (up to $500K TVL deployed)
-- Strategy type: Solana USDC yield optimization via Voltr Protocol adaptors
-- Agent access: `AGENT_ALLOWED` ✓
-
----
-
-## Live Demo Output
-
-```
-╔══════════════════════════════════════════════════════════╗
-║          AEGIS AI YIELD VAULT — REBALANCER               ║
-║   Strategies: Kamino | Drift | Jupiter Lend | Marginfi   ║
-╚══════════════════════════════════════════════════════════╝
-Check interval: 300s | Rebalance threshold: 4%
-Max concentration: 70% | Min APY gain: +0.25%
-
-[vault][0s] --- Cycle #1 ---
-[vault][0s] Scanning protocol yields...
-[vault][2s] Running health checks...
-
-┌─────────────────────────────────────────────────────────┐
-│       AEGIS YIELD VAULT — ALLOCATION REPORT             │
-├──────────────────┬──────────┬─────────────┬─────────────┤
-│ Protocol         │  APY %   │  Util %     │  Target %   │
-├──────────────────┼──────────┼─────────────┼─────────────┤
-│ Kamino USDC      │    2.54 % │     0.0 %   │     41.9 %   │
-│ Jupiter Lend USDC │    3.53 % │     0.0 %   │     58.1 %   │
-└──────────────────┴──────────┴─────────────┴─────────────┘
-
-[vault][2s] REBALANCE TRIGGERED — drift=50.00% gain=+3.120%
-[vault][2s]   kamino     0.0% → 41.9%  (+41.9%)
-[vault][2s]   jupiter    0.0% → 58.1%  (+58.1%)
-[vault][2s] Rebalance #1 complete ✓
-
-[vault][302s] --- Cycle #2 ---
-[vault][305s] Current portfolio APY: 3.120% → Target: 3.120%
-[vault][305s] No rebalance needed (drift 0.00% < 4% threshold)
-```
-
-Data sourced live from DeFiLlama. Allocation updated every 5 minutes. Second cycle correctly holds position — no unnecessary rebalancing.
-
----
-
-## License
-
-MIT
+- Deadline: April 6, 2026
+- Prize: Vault seed funding (up to $500K TVL)
+- Protocol: Voltr (vault-sdk)
+- AGENT_ALLOWED: yes
